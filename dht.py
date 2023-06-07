@@ -1,12 +1,13 @@
 import time
 import adafruit_dht
 import psutil
+import board
 
 for proc in psutil.process_iter():
     if proc.name == 'libgpiod_pulsein':
         proc.kill()
 
-dht_device = adafruit_dht.DHT22(17)
+dht_device = adafruit_dht.DHT22(board.D27, use_pulseio=False)
 
 try:
     while True:
