@@ -3,9 +3,11 @@ import time
 import adafruit_dht
 import psutil
 import board
+import paho.mqtt.client as mqtt
+import json
 
 for proc in psutil.process_iter():
-    if proc.name() == 'libgpiod_pulsein':
+    if proc.name == 'libgpiod_pulsein':
         proc.kill()
 
 GPIO.setwarnings(False)
@@ -17,8 +19,36 @@ dht_device = adafruit_dht.DHT22(board.D27, use_pulseio=False)
 GPIO.setup(buzzer_pin, GPIO.OUT)
 GPIO.setup(LED, GPIO.OUT)
 
+
+MQTT_HOST = "broker.emqx.io"
+MQTT_PORT = 1883
+MQTT_KEEPALIVE_INTERVAL = 60
+
+MQTT_PUB_TOPIC = "mobile/gusdnr/sensing"
+MQTT_SUB_TOPIC = "mobile/gusdnr/led"
+
+def on_publish(client, userdata, mid):
+    print("\nMessage Published...")
+
+def on_message(client, useradta, message):
+    result = str(message, patload.decode("utf-8"))
+    print(f"reeived message = {result}")
+    if result.upper() == "ON":
+        GPIO.output(LED, GPIO.HIGH)
+    if result.upper() == "OFF":
+        GPIO.output(LED, GPIO.LOW)
+    else:
+        print("Illegal Argument")
+
+client = mqtt.Client()
+client.on_message = on_message
+client.on_publish = on_publish
+
+client.connect(MQTT_HOST, MQTT_PORT, MQTT_KEEPALIVE_INTERVAL)
+client.subscribe(MQTT_SUB_TOPIC)
+client.loop_start()
+
 scale = [523]  # 음계입력
-note_list = [0]  # 음계조합
 term = [0.5]  # 음길이 조합
 
 try:
@@ -26,35 +56,40 @@ try:
         try:
             temperature = dht_device.temperature
             humidity = dht_device.humidity
+
+            sensing = {
+                "temperature": temperature,
+                "humidity": humidity
+            }
+            value = json.dumps(sensing)
+            client.publish(MQTT_PUB_TOPIC, value)
+            print(value)
             
-            print(temperature)
-            print(humidity)
+            if temperature >= 25:
+                print("Warning!")
+                for _ in range(3):
+                    GPIO.output(LED, GPIO.HIGH)
+                    p = GPIO.PWM(buzzer_pin, 100)
+                    p.start(100)
+                    p.ChangeDutyCycle(90)
+                    for i in range(len(scale)):
+                        p.ChangeFrequency(scale[i])
+                        time.sleep(term[i])
+                    p.stop()
+                    GPIO.output(LED, GPIO.LOW)
+                    time.sleep(0.5)
+                client.publish(MQTT_PUB_TOPIC, "경고!")
+                
         except RuntimeError:
             time.sleep(2)
-        
-        if temperature >= 25:
-            print("On")
-            for _ in range(3):
-                GPIO.output(LED, GPIO.HIGH)
-                p = GPIO.PWM(buzzer_pin, 100)
-                p.start(100)
-                p.ChangeDutyCycle(90)
-                for i in range(len(note_list)):
-                    p.ChangeFrequency(scale[note_list[i]])
-                    time.sleep(term[i])
-                p.stop()
-                GPIO.output(LED, GPIO.LOW)
-                time.sleep(0.5)
-            print("Temperature:", temperature)
-            print("Humidity:", humidity)
-        else:
-            print("Off")
-            GPIO.output(LED, GPIO.LOW)
-        
-        time.sleep(1)
-            
+            continue
+
+        time.sleep(5)
+
 except KeyboardInterrupt:
     print("사용자가 프로그램을 종료했습니다.")
 finally:
+    dht_device.exit()
+    client.disconnect()
     GPIO.output(LED, GPIO.LOW)
     GPIO.cleanup()
